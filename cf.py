@@ -1,4 +1,4 @@
-CFGS = { 'cvt-13-224x224': dict(INPUT_SIZE=(72, 72)
+CFGS = { 'cvt-13-72x72': dict(INPUT_SIZE=(72, 72)
                                 NUM_STAGES= 3,
                                 PATCH_SIZE=[3, 2, 2],
                                 PATCH_STRIDE=[2, 1, 1],
