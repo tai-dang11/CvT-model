@@ -4,8 +4,8 @@ from model import Cvt
 import tensorflow as tf
 from cf import CFGS
 
-CvT = Cvt(model_name='cvt-13-224x224', num_classes=10, CFGS=CFGS)
-model = tf.keras.Sequential(tf.keras.Input(shape=(224, 224, 3)),
+CvT = Cvt(model_name='cvt-13-72x72', num_classes=10, CFGS=CFGS)
+model = tf.keras.Sequential(
                             CvT,
                             tf.layers.Dense(num_classes, activation="softmax")
                             )
