@@ -14,7 +14,7 @@ optimizer = tfa.optimizers.AdamW(
     learning_rate=0.00001, weight_decay=0.1
 )
 
-model.compile(loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True), optimizer='adam', metrics=["accuracy"])
+model.compile(loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True), optimizer=optimizer, metrics=["accuracy"])
 
 
 model.fit(
