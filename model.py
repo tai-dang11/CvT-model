@@ -1,18 +1,10 @@
 from tensorflow.keras import layers
-from tensorflow import keras
-from collections import OrderedDict
-import matplotlib.pyplot as plt
-import logging
 import tensorflow as tf
-import tensorflow_addons as tfa
 from einops.layers.tensorflow import Rearrange
 from einops import rearrange
 from droppath import DropPath
 from tensorflow.keras.layers import Dense, Dropout, Conv2D, LayerNormalization, BatchNormalization, AveragePooling2D
-from dataset import x_test,x_train,y_train,y_test
 from cf import CFGS
-
-num_classes = 10
 
 class MlpBlock(layers.Layer):
     def __init__(self,
@@ -35,77 +27,6 @@ class MlpBlock(layers.Layer):
         x = self.drop(x)
         return x
 
-def _build_projection(
-                     dim_in,
-                     dim_out,
-                     kernel_size,
-                     padding,
-                     stride,
-                     method):
-    if method == 'dw_bn':
-        proj = tf.keras.Sequential([
-            tf.keras.layers.DepthwiseConv2D(
-                kernel_size=kernel_size,
-                padding=padding,
-                strides=stride,
-                use_bias=False,
-                groups=dim_in
-            ),
-            # ('conv',nn.Conv2d(
-            #     dim_in,
-            #     dim_in,
-            #     kernel_size=kernel_size,
-            #     padding=padding,
-            #     stride=stride,
-            #     bias=False,
-            #     groups=dim_in
-            # )),
-            BatchNormalization(dim_in),
-            Rearrange('b c h w -> b (h w) c'),
-        ])
-
-        # proj = tf.keras.Sequential([
-        #     nn.Conv2d(
-        #         dim_in,
-        #         dim_in,
-        #         kernel_size=kernel_size,
-        #         padding=padding,
-        #         stride=stride,
-        #         bias=False,
-        #         groups=dim_in
-        #     ),
-        #     BatchNormalization(dim_in),
-        #     Rearrange('b c h w -> b (h w) c'),
-        # ])
-
-
-    elif method == 'avg':
-        proj = tf.keras.Sequential([
-            AveragePooling2D(
-                kernel_size=kernel_size,
-                padding=padding,
-                strides=stride,
-                ceil_mode=True
-            ),
-            Rearrange('b c h w -> b (h w) c'),
-        ])
-        # proj = tf.keras.Sequential([
-        #     AveragePooling2D(
-        #         kernel_size=kernel_size,
-        #         padding=padding,
-        #         stride=stride,
-        #         ceil_mode=True
-        #     ),
-        #     Rearrange('b c h w -> b (h w) c'),
-        # ])
-    elif method == 'linear':
-        proj = None
-    else:
-        raise ValueError('Unknown method ({})'.format(method))
-
-    return proj
-
-
 
 class Attention(layers.Layer):
     def __init__(self,
@@ -119,8 +40,6 @@ class Attention(layers.Layer):
                  kernel_size=3,
                  stride_kv=1,
                  stride_q=1,
-                 # padding_kv=1,
-                 # padding_q=1,
                  padding_kv='same',
                  padding_q='same',
                  with_cls_token=True,
@@ -135,15 +54,15 @@ class Attention(layers.Layer):
         self.scale = dim_out ** -0.5
         self.with_cls_token = with_cls_token
 
-        self.conv_proj_q = _build_projection(
+        self.conv_proj_q = self._build_projection(
             dim_in, dim_out, kernel_size, padding_q,
             stride_q, 'linear' if method == 'avg' else method
         )
-        self.conv_proj_k = _build_projection(
+        self.conv_proj_k = self._build_projection(
             dim_in, dim_out, kernel_size, padding_kv,
             stride_kv, method
         )
-        self.conv_proj_v = _build_projection(
+        self.conv_proj_v = self._build_projection(
             dim_in, dim_out, kernel_size, padding_kv,
             stride_kv, method
         )
@@ -155,6 +74,44 @@ class Attention(layers.Layer):
         self.proj = layers.Dense(dim_out)
         self.proj_drop = layers.Dropout(proj_drop)
 
+        def _build_projection(self,
+                            dim_in,
+                            dim_out,
+                            kernel_size,
+                            padding,
+                            stride,
+                            method):
+          if method == 'dw_bn':
+              proj = tf.keras.Sequential([
+                  tf.keras.layers.Conv2D(
+                      filters = dim_in,
+                      kernel_size = kernel_size,
+                      padding=padding,
+                      strides=stride,
+                      use_bias=False,
+                      groups=dim_in
+                  ),
+                  BatchNormalization(dim_in),
+                  Rearrange('b c h w -> b (h w) c'),
+              ])
+
+
+          elif method == 'avg':
+              proj = tf.keras.Sequential([
+                  AveragePooling2D(
+                      kernel_size=kernel_size,
+                      padding=padding,
+                      strides=stride,
+                      ceil_mode=True
+                  ),
+                  Rearrange('b c h w -> b (h w) c'),
+              ])
+          elif method == 'linear':
+              proj = None
+          else:
+              raise ValueError('Unknown method ({})'.format(method))
+
+          return proj
 
 
 
@@ -225,25 +182,18 @@ class ConvEmbed(layers.Layer):
                 norm_layer=None):
         super().__init__()
         self.patch_size = patch_size
-
-        # self.proj = nn.Conv2d(
-        #     in_chans, embed_dim,
-        #     kernel_size=patch_size,
-        #     stride=stride,
-        #     padding=padding
-        # )
         self.proj = Conv2D(
             embed_dim,
             kernel_size=patch_size,
             strides=strides,
             padding=padding
         )
-        self.norm = norm_layer(embed_dim) if norm_layer else None
+        self.norm = norm_layer(epsilon=1e-5)
 
     def forward(self, x):
         x = self.proj(x)
 
-        B, C, H, W = x.shape
+        B, C, H, W = x.get_shape().as_list()
         x = rearrange(x, 'b c h w -> b (h w) c')
         if self.norm:
           x = self.norm(x)
@@ -269,26 +219,24 @@ class Block(layers.Layer):
 
         self.with_cls_token = kwargs['with_cls_token']
 
-        self.norm1 = norm_layer(dim_in)
+        self.norm1 = norm_layer(epsilon=1e-5)
         self.attn = Attention(
             dim_in, dim_out, num_heads, qkv_bias, attn_drop, drop,
             **kwargs
         )
         self.drop_path = DropPath(drop_path) \
-            if drop_path > 0. else None
-        self.norm2 = norm_layer(dim_out)
+            if drop_path > 0. else 0.
+        self.norm2 = norm_layer(epsilon=1e-5)
 
         dim_mlp_hidden = int(dim_out * mlp_ratio)
         self.mlp = MlpBlock(
             in_features=dim_out,
             hidden_features=dim_mlp_hidden,
-            # act_layer=act_layer,
             drop=drop
         )
 
     def forward(self, x, h, w):
         res = x
-
         x = self.norm1(x)
         attn = self.attn(x, h, w)
         x = res + self.drop_path(attn)
@@ -318,7 +266,7 @@ class VisionTransformer(layers.Layer):
                  norm_layer=LayerNormalization,
                  **kwargs):
         super().__init__()
-        self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
+        self.num_features = self.embed_dim = embed_dim
 
         self.rearrage = None
 
@@ -343,45 +291,36 @@ class VisionTransformer(layers.Layer):
         self.pos_drop = Dropout(rate=drop_rate)
         dpr = [x for x in tf.linspace(0., drop_path_rate, depth)]  # stochastic depth decay rule
 
-        blocks = []
-        for j in range(depth):
-            blocks.append(
-                Block(
-                    dim_in=embed_dim,
-                    dim_out=embed_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    drop=drop_rate,
-                    attn_drop=attn_drop_rate,
-                    drop_path=dpr[j],
-                    # act_layer=act_layer,
-                    norm_layer=norm_layer,
-                    **kwargs
-                )
-            )
-        self.blocks = tf.keras.Sequential(blocks)
+        self.blocks = tf.keras.Sequential([Block(
+                                            dim_in=embed_dim,
+                                            dim_out=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop=drop_rate,
+                                            attn_drop=attn_drop_rate,
+                                            drop_path=dpr[j],
+                                            # act_layer=act_layer,
+                                            norm_layer=norm_layer,
+                                            **kwargs)
+                                            for j in range(depth)])
 
-        if self.cls_token is not None:
-            tf.keras.initializers.TruncatedNormal(self.cls_token, stddev=.02)
 
 
     def forward(self, x):
         x = self.patch_embed(x)
-        B, C, H, W = x.size()
+        B, C, H, W = x.get_shape().as_list()
 
         x = rearrange(x, 'b c h w -> b (h w) c')
 
         cls_tokens = None
         if self.cls_token is not None:
-            # stole cls_tokens impl from Phil Wang, thanks
             cls_tokens = self.cls_token.expand(B, -1, -1)
             x = tf.concat((cls_tokens, x), axis=1)
 
         x = self.pos_drop(x)
 
-        for i, blk in enumerate(self.blocks):
-            x = blk(x, H, W)
+        x = self.blocks(x)
 
         if self.cls_token is not None:
             cls_tokens, x = tf.split(x, [1, H*W], 1)
@@ -394,7 +333,6 @@ class ConvolutionalVisionTransformer(layers.Layer):
     def __init__(self,
                  in_chans=3,
                  num_classes=10,
-                 # act_layer=tfa.layers.GELU,
                  norm_layer=LayerNormalization,
                  spec=None):
         super().__init__()
@@ -425,7 +363,6 @@ class ConvolutionalVisionTransformer(layers.Layer):
 
             stage = VisionTransformer(
                 in_chans=in_chans,
-                # act_layer=act_layer,
                 norm_layer=norm_layer,
                 **kwargs
             )
@@ -434,13 +371,12 @@ class ConvolutionalVisionTransformer(layers.Layer):
             in_chans = spec['DIM_EMBED'][i]
 
         dim_embed = spec['DIM_EMBED'][-1]
-        self.norm = norm_layer(dim_embed)
+        self.norm = norm_layer(epsilon=1e-5)
         self.cls_token = spec['CLS_TOKEN'][-1]
 
         # Classifier head
-        # self.head = Dense(num_classes, name='head') if num_classes > 0 else tf.keras.initializers.Identity()
+        self.head = Dense(num_classes if num_classes > 0. else None, name='head')
 
-        self.head = Dense(num_classes if num_classes > 0. else 0., name='head')
     def forward_features(self, x):
         for i in range(self.num_stages):
             x, cls_tokens = getattr(self, f'stage{i}')(x)
@@ -461,24 +397,14 @@ class ConvolutionalVisionTransformer(layers.Layer):
 
         return x
 
-model = ConvolutionalVisionTransformer(spec=CFGS['cvt-13-224x224'])
-model(tf.keras.Input((72,72,3)))
-model = tf.keras.Sequential([
-                            model,
-                            tf.keras.layers.Dense(num_classes, activation='softmax')
-                            ])
 
-input = tf.random.normal((72,72,3))
-output = model(input)
-print(model.weights)
-
-# optimizer = tfa.optimizers.AdamW(
-#     learning_rate=0.00001, weight_decay=0.1
-# )
-#ep
-#     validation_data = (x_test,y_test),
-#     batch_size=32,
-#     epochs=10,
-#     validation_split=0.1,
-#     verbose=1
-# )
+def Cvt(model_name='cvt-13-224x224', num_classes=10, CFGS=CFGS):
+    CFGS = CFGS[model_name]
+    net = ConvolutionalVisionTransformer(
+        in_chans=3,
+        num_classes=10,
+        norm_layer=LayerNormalization,
+        spec = CFGS
+    )
+    net(tf.keras.Input(shape=(2,CFGS['INPUT_SIZE'][0], CFGS['INPUT_SIZE'][1], 3)))
+    return net
