@@ -398,7 +398,7 @@ class ConvolutionalVisionTransformer(layers.Layer):
         return x
 
 
-def Cvt(model_name='cvt-13-224x224', num_classes=10, CFGS=CFGS):
+def Cvt(model_name='cvt-13-72x72', num_classes=10, CFGS=CFGS):
     CFGS = CFGS[model_name]
     net = ConvolutionalVisionTransformer(
         in_chans=3,
